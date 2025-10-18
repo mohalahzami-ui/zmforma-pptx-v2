@@ -1,4 +1,4 @@
-pythonfrom pptx.util import Inches, Pt
+from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.dml.color import RGBColor
 
