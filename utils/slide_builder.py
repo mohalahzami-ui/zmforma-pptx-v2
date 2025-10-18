@@ -2,7 +2,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
-from pptx.enum.text import MSO_AUTO_SIZE
+from pptx.enum.text import MSO_AUTO_SIZE, PP_ALIGN
 import tempfile
 import os
 import requests
@@ -12,7 +12,7 @@ from .styles import Colors, Formatter
 
 class PresentationBuilder:
     """
-    BUILDER POUR TEMPLATE GAMMA - SUPPRESSION AUTO DES SLIDES
+    BUILDER OPTIMISÉ - UTILISE LES PLACEHOLDERS DU TEMPLATE
     """
 
     def __init__(self, data, template_url=None):
@@ -35,16 +35,15 @@ class PresentationBuilder:
                 self.prs = Presentation(self._tmp_template_path)
                 print("✅ Template chargé")
                 
-                # 🔥 SUPPRESSION AUTOMATIQUE DES SLIDES EXISTANTES
+                # Suppression des slides existantes
                 nb_slides = len(self.prs.slides)
                 if nb_slides > 0:
                     print(f"🗑️  Suppression de {nb_slides} slides du template...")
-                    # Méthode propre pour supprimer les slides
                     while len(self.prs.slides) > 0:
                         rId = self.prs.slides._sldIdLst[0].rId
                         self.prs.part.drop_rel(rId)
                         del self.prs.slides._sldIdLst[0]
-                    print("✅ Template nettoyé (slides supprimées, design conservé)")
+                    print("✅ Template nettoyé")
                 
             except Exception as e:
                 print(f"⚠️  Erreur template: {e}")
@@ -52,45 +51,24 @@ class PresentationBuilder:
         else:
             self.prs = Presentation()
 
-        # Forcer 16:9
         self.prs.slide_width = Inches(10)
         self.prs.slide_height = Inches(5.625)
 
-        # Lister layouts
+        # Liste des layouts
         self._layout_names = []
         try:
             for i, l in enumerate(self.prs.slide_layouts):
                 name = getattr(l, "name", f"Layout {i}")
                 self._layout_names.append(name)
-            print("📐 Layouts disponibles:", self._layout_names)
+                print(f"  Layout {i}: {name}")
         except Exception:
             pass
 
     def _pick_layout(self, slide_type):
-        """Sélection du layout selon le type"""
+        """Sélection layout - PRIORITÉ AU BLANK pour contrôle total"""
         layouts = self.prs.slide_layouts
         
-        type_map = {
-            'cover': ['title', 'cover', 'titre'],
-            'section': ['section', 'separator'],
-            'qcm': ['content', 'title and content', 'blank'],
-            'vrai_faux': ['content', 'title and content', 'blank'],
-            'cas_pratique': ['content', 'title and content', 'blank'],
-            'mise_en_situation': ['content', 'title and content', 'blank'],
-            'correction': ['content', 'title and content', 'blank']
-        }
-        
-        preferred = type_map.get(slide_type, ['blank', 'content'])
-        
-        for keyword in preferred:
-            for layout in layouts:
-                try:
-                    if keyword.lower() in layout.name.lower():
-                        return layout
-                except Exception:
-                    pass
-        
-        # Fallback : Blank ou premier layout
+        # Pour TOUS les types, on veut "Blank" pour avoir le contrôle total
         for layout in layouts:
             try:
                 if 'blank' in layout.name.lower():
@@ -98,6 +76,7 @@ class PresentationBuilder:
             except Exception:
                 pass
         
+        # Fallback
         return layouts[min(6, len(layouts)-1)] if len(layouts) > 6 else layouts[0]
 
     def build(self):
@@ -113,14 +92,7 @@ class PresentationBuilder:
 
                 slide = self.prs.slides.add_slide(layout)
 
-                # NE JAMAIS repeindre le fond (garde le template)
-                bg = slide_data.get('background')
-                if bg and bg not in (None, '', 'None', 'null'):
-                    background = slide.background
-                    fill = background.fill
-                    fill.solid()
-                    fill.fore_color.rgb = Colors.hex_to_rgb(bg)
-
+                # NE JAMAIS repeindre le fond
                 self._fill_slide(slide, slide_data)
 
             except Exception as e:
@@ -141,7 +113,7 @@ class PresentationBuilder:
         return temp_path
 
     def _fill_slide(self, slide, data):
-        """Remplit la slide"""
+        """Remplit la slide - SANS BORDURES"""
         layout_cfg = data.get('layout', {})
         
         for key, element in layout_cfg.items():
@@ -149,15 +121,16 @@ class PresentationBuilder:
                 continue
             
             if 'items' in element:
-                self._add_bullets(slide, element)
+                self._add_bullets_clean(slide, element)
             elif 'text' in element:
-                self._add_textbox(slide, element)
+                self._add_textbox_clean(slide, element)
             elif 'url' in element:
                 self._add_image(slide, element)
             elif 'fill' in element:
                 self._add_shape(slide, element)
 
-    def _add_textbox(self, slide, config):
+    def _add_textbox_clean(self, slide, config):
+        """Ajoute textbox SANS bordures ni cadres"""
         if not config or 'text' not in config:
             return
         
@@ -167,16 +140,35 @@ class PresentationBuilder:
         h = Inches(config.get('h', 1.0))
 
         textbox = slide.shapes.add_textbox(x, y, w, h)
-        textbox.text = str(config['text'])
         
-        try:
-            textbox.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
-        except Exception:
-            pass
+        # CRITIQUE : Supprimer toutes les bordures
+        textbox.line.fill.background()  # Pas de bordure
         
-        Formatter.format_textbox(textbox, config, self.default_font)
+        text_frame = textbox.text_frame
+        text_frame.clear()
+        text_frame.word_wrap = True
+        text_frame.margin_left = 0
+        text_frame.margin_right = 0
+        text_frame.margin_top = 0
+        text_frame.margin_bottom = 0
+        
+        # Ajouter le texte
+        p = text_frame.paragraphs[0]
+        p.text = str(config['text'])
+        p.alignment = PP_ALIGN.LEFT
+        
+        # Formatage
+        for run in p.runs:
+            run.font.name = config.get('font', self.default_font)
+            run.font.size = Pt(config.get('fontSize', 16))
+            run.font.bold = config.get('bold', False)
+            
+            color = config.get('color')
+            if color:
+                run.font.color.rgb = Colors.hex_to_rgb(color)
 
-    def _add_bullets(self, slide, config):
+    def _add_bullets_clean(self, slide, config):
+        """Ajoute bullets SANS bordures"""
         if not config or 'items' not in config:
             return
         
@@ -191,14 +183,40 @@ class PresentationBuilder:
 
         textbox = slide.shapes.add_textbox(x, y, w, h)
         
-        try:
-            textbox.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
-        except Exception:
-            pass
+        # CRITIQUE : Supprimer bordures
+        textbox.line.fill.background()
         
-        Formatter.add_bullet_points(textbox.text_frame, items, config, self.default_font)
+        text_frame = textbox.text_frame
+        text_frame.clear()
+        text_frame.word_wrap = True
+        text_frame.margin_left = 0
+        text_frame.margin_right = 0
+        text_frame.margin_top = 0
+        text_frame.margin_bottom = 0
+        
+        for i, item in enumerate(items):
+            if not item:
+                continue
+            
+            p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
+            p.text = str(item)
+            p.level = 0
+            p.alignment = PP_ALIGN.LEFT
+            
+            if config.get('bullet', True):
+                p.bullet = True
+            
+            for run in p.runs:
+                run.font.name = config.get('font', self.default_font)
+                run.font.size = Pt(config.get('fontSize', 16))
+                run.font.bold = config.get('bold', False)
+                
+                color = config.get('color')
+                if color:
+                    run.font.color.rgb = Colors.hex_to_rgb(color)
 
     def _add_shape(self, slide, config):
+        """Ajoute forme"""
         if not config:
             return
         
@@ -216,6 +234,7 @@ class PresentationBuilder:
         shape.line.fill.background()
 
     def _add_image(self, slide, config):
+        """Ajoute image"""
         if not config or 'url' not in config:
             return
         
