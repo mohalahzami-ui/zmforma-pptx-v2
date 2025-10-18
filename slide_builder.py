@@ -1,4 +1,4 @@
-pythonfrom pptx import Presentation
+from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
