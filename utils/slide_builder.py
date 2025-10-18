@@ -12,10 +12,7 @@ from .styles import Colors, Formatter
 
 class PresentationBuilder:
     """
-    BUILDER OPTIMISÉ POUR TEMPLATE GAMMA
-    - Utilise les LAYOUTS NATIFS du template .pptx
-    - NE repeint JAMAIS le fond (garde la charte graphique)
-    - Positionne le contenu EXACTEMENT selon le template
+    BUILDER POUR TEMPLATE GAMMA - SUPPRESSION AUTO DES SLIDES
     """
 
     def __init__(self, data, template_url=None):
@@ -25,7 +22,6 @@ class PresentationBuilder:
         self.default_font = self.theme.get('font', 'Arial')
         self._tmp_template_path = None
 
-        # Charger template distant
         if template_url:
             try:
                 print(f"⬇️  Téléchargement template: {template_url}")
@@ -38,6 +34,18 @@ class PresentationBuilder:
                 self._tmp_template_path = path
                 self.prs = Presentation(self._tmp_template_path)
                 print("✅ Template chargé")
+                
+                # 🔥 SUPPRESSION AUTOMATIQUE DES SLIDES EXISTANTES
+                nb_slides = len(self.prs.slides)
+                if nb_slides > 0:
+                    print(f"🗑️  Suppression de {nb_slides} slides du template...")
+                    # Méthode propre pour supprimer les slides
+                    while len(self.prs.slides) > 0:
+                        rId = self.prs.slides._sldIdLst[0].rId
+                        self.prs.part.drop_rel(rId)
+                        del self.prs.slides._sldIdLst[0]
+                    print("✅ Template nettoyé (slides supprimées, design conservé)")
+                
             except Exception as e:
                 print(f"⚠️  Erreur template: {e}")
                 self.prs = Presentation()
@@ -48,57 +56,52 @@ class PresentationBuilder:
         self.prs.slide_width = Inches(10)
         self.prs.slide_height = Inches(5.625)
 
-        # Lister layouts disponibles
+        # Lister layouts
         self._layout_names = []
         try:
             for i, l in enumerate(self.prs.slide_layouts):
                 name = getattr(l, "name", f"Layout {i}")
                 self._layout_names.append(name)
-            print("📐 Layouts template:", self._layout_names)
+            print("📐 Layouts disponibles:", self._layout_names)
         except Exception:
             pass
 
     def _pick_layout(self, slide_type):
-        """
-        Sélection INTELLIGENTE du layout selon le type de slide
-        Priorité : layouts du template Gamma
-        """
+        """Sélection du layout selon le type"""
         layouts = self.prs.slide_layouts
         
-        # Mapping type -> nom de layout (ajuste selon ton template)
         type_map = {
             'cover': ['title', 'cover', 'titre'],
-            'section': ['section', 'separator', 'chapitre'],
-            'qcm': ['content', 'title and content', 'titre et contenu'],
-            'vrai_faux': ['content', 'title and content'],
-            'cas_pratique': ['content', 'title and content'],
-            'mise_en_situation': ['content', 'title and content'],
-            'objectifs': ['content', 'title and content'],
-            'correction': ['content', 'title and content']
+            'section': ['section', 'separator'],
+            'qcm': ['content', 'title and content', 'blank'],
+            'vrai_faux': ['content', 'title and content', 'blank'],
+            'cas_pratique': ['content', 'title and content', 'blank'],
+            'mise_en_situation': ['content', 'title and content', 'blank'],
+            'correction': ['content', 'title and content', 'blank']
         }
         
-        preferred = type_map.get(slide_type, ['content', 'title and content'])
+        preferred = type_map.get(slide_type, ['blank', 'content'])
         
-        # Chercher un layout correspondant
         for keyword in preferred:
-            for i, layout in enumerate(layouts):
+            for layout in layouts:
                 try:
                     if keyword.lower() in layout.name.lower():
                         return layout
                 except Exception:
                     pass
         
-        # Fallback : "Title and Content" (index 1) ou Blank (index 6)
-        try:
-            if len(layouts) > 1:
-                return layouts[1]
-        except Exception:
-            pass
+        # Fallback : Blank ou premier layout
+        for layout in layouts:
+            try:
+                if 'blank' in layout.name.lower():
+                    return layout
+            except Exception:
+                pass
         
-        return layouts[0]
+        return layouts[min(6, len(layouts)-1)] if len(layouts) > 6 else layouts[0]
 
     def build(self):
-        """Construction de la présentation"""
+        """Construction"""
         print(f"🔨 Construction de {len(self.slides_data)} slides...")
 
         for i, slide_data in enumerate(self.slides_data):
@@ -108,10 +111,9 @@ class PresentationBuilder:
                 layout_name = getattr(layout, 'name', '?')
                 print(f"  • Slide {i+1}: {slide_type} -> {layout_name}")
 
-                # Créer slide AVEC le layout du template
                 slide = self.prs.slides.add_slide(layout)
 
-                # ⚠️ NE JAMAIS repeindre le fond (sauf si explicitement demandé)
+                # NE JAMAIS repeindre le fond (garde le template)
                 bg = slide_data.get('background')
                 if bg and bg not in (None, '', 'None', 'null'):
                     background = slide.background
@@ -119,21 +121,17 @@ class PresentationBuilder:
                     fill.solid()
                     fill.fore_color.rgb = Colors.hex_to_rgb(bg)
 
-                # Remplir contenu
                 self._fill_slide(slide, slide_data)
 
             except Exception as e:
                 print(f"❌ Erreur slide {i+1}: {str(e)}")
                 import traceback
                 print(traceback.format_exc())
-                self._build_error_slide(i+1, str(e))
 
-        # Sauvegarder
         temp_path = os.path.join(tempfile.gettempdir(), 'presentation_zmforma.pptx')
         self.prs.save(temp_path)
         print(f"✅ Présentation sauvegardée: {temp_path}")
 
-        # Nettoyage
         if self._tmp_template_path and os.path.exists(self._tmp_template_path):
             try:
                 os.remove(self._tmp_template_path)
@@ -143,26 +141,23 @@ class PresentationBuilder:
         return temp_path
 
     def _fill_slide(self, slide, data):
-        """Remplit une slide selon son layout"""
+        """Remplit la slide"""
         layout_cfg = data.get('layout', {})
         
-        # Ajouter chaque élément
         for key, element in layout_cfg.items():
-            if not element:
+            if not element or not isinstance(element, dict):
                 continue
             
-            if isinstance(element, dict):
-                if 'items' in element:
-                    self._add_bullets(slide, element)
-                elif 'text' in element:
-                    self._add_textbox(slide, element)
-                elif 'url' in element:
-                    self._add_image(slide, element)
-                elif 'fill' in element:
-                    self._add_shape(slide, element)
+            if 'items' in element:
+                self._add_bullets(slide, element)
+            elif 'text' in element:
+                self._add_textbox(slide, element)
+            elif 'url' in element:
+                self._add_image(slide, element)
+            elif 'fill' in element:
+                self._add_shape(slide, element)
 
     def _add_textbox(self, slide, config):
-        """Ajoute une textbox"""
         if not config or 'text' not in config:
             return
         
@@ -182,7 +177,6 @@ class PresentationBuilder:
         Formatter.format_textbox(textbox, config, self.default_font)
 
     def _add_bullets(self, slide, config):
-        """Ajoute une liste à puces"""
         if not config or 'items' not in config:
             return
         
@@ -205,7 +199,6 @@ class PresentationBuilder:
         Formatter.add_bullet_points(textbox.text_frame, items, config, self.default_font)
 
     def _add_shape(self, slide, config):
-        """Ajoute une forme (rectangle)"""
         if not config:
             return
         
@@ -223,7 +216,6 @@ class PresentationBuilder:
         shape.line.fill.background()
 
     def _add_image(self, slide, config):
-        """Ajoute une image"""
         if not config or 'url' not in config:
             return
         
@@ -247,40 +239,3 @@ class PresentationBuilder:
                     slide.shapes.add_picture(url, x, y, width=w, height=h)
         except Exception as e:
             print(f"⚠️  Image impossible: {url} - {str(e)}")
-
-    def _build_error_slide(self, slide_num, error_msg):
-        """Crée une slide d'erreur en cas de problème"""
-        try:
-            layout = self._pick_layout('generic')
-            slide = self.prs.slides.add_slide(layout)
-            
-            # Fond rouge pâle
-            background = slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = RGBColor(255, 240, 240)
-            
-            # Titre erreur
-            title_box = slide.shapes.add_textbox(
-                Inches(0.5), Inches(1.5), Inches(9.0), Inches(0.8)
-            )
-            title_box.text = f"❌ Erreur - Slide {slide_num}"
-            Formatter.format_textbox(title_box, {
-                'fontSize': 32,
-                'bold': True,
-                'color': 'D32F2F',
-                'align': 'center'
-            })
-            
-            # Message d'erreur
-            error_box = slide.shapes.add_textbox(
-                Inches(0.5), Inches(2.5), Inches(9.0), Inches(2.0)
-            )
-            error_box.text = str(error_msg)[:700]
-            Formatter.format_textbox(error_box, {
-                'fontSize': 14,
-                'color': '666666',
-                'align': 'left'
-            })
-        except Exception as e:
-            print(f"⚠️ Impossible de créer slide d'erreur: {str(e)}")
