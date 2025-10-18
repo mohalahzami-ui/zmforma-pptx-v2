@@ -13,7 +13,8 @@ from .styles import Colors, Formatter
 class PresentationBuilder:
     """
     Constructeur de présentation PowerPoint
-    - Utilise un template .pptx si template_url est fourni
+    - Utilise un template .pptx distant si template_url est fourni
+    - Sélectionne une MISE EN PAGE (layout) du template par nom ou index
     - Format 16:9 (10" x 5.625")
     """
 
@@ -25,7 +26,7 @@ class PresentationBuilder:
 
         self._tmp_template_path = None
 
-        # Charger la présentation depuis template si dispo
+        # Charger la présentation depuis un template distant si fourni
         if template_url:
             try:
                 print(f"⬇️ Téléchargement du template: {template_url}")
@@ -44,50 +45,141 @@ class PresentationBuilder:
         else:
             self.prs = Presentation()
 
-        # Forcer le 16:9
+        # Forcer 16:9 pour cohérence (garde quand même le master)
         self.prs.slide_width = Inches(10)
         self.prs.slide_height = Inches(5.625)
 
+        # Préparer les noms de layouts dispos (debug utile)
+        try:
+            self._layout_names = [getattr(l, "name", f"Layout {i}") for i, l in enumerate(self.prs.slide_layouts)]
+            print("📐 Layouts disponibles:", self._layout_names)
+        except Exception:
+            self._layout_names = []
+
+    # ---------- Sélection de layout ----------
+
+    def _pick_layout(self, slide_type, hint=None):
+        """
+        Sélectionne une mise en page du template.
+        - hint peut être:
+          * int -> index du layout
+          * str -> nom (contient)
+          * dict -> {"name": "..."} ou {"index": 3}
+        - fallback: mappe par type (cover/section/qcm/correction…)
+        - dernier recours: Blank (index 6) ou index 1 (Title and Content)
+        """
+        layouts = self.prs.slide_layouts
+
+        # 1) Si hint dict précis
+        if isinstance(hint, dict):
+            if "index" in hint and isinstance(hint["index"], int):
+                idx = hint["index"]
+                if 0 <= idx < len(layouts):
+                    return layouts[idx]
+            if "name" in hint and isinstance(hint["name"], str):
+                name_part = hint["name"].strip().lower()
+                for i in range(len(layouts)):
+                    try:
+                        if name_part in layouts[i].name.lower():
+                            return layouts[i]
+                    except Exception:
+                        pass
+
+        # 2) Si hint simple (str ou int)
+        if isinstance(hint, int) and 0 <= hint < len(layouts):
+            return layouts[hint]
+        if isinstance(hint, str) and hint.strip():
+            name_part = hint.strip().lower()
+            for i in range(len(layouts)):
+                try:
+                    if name_part in layouts[i].name.lower():
+                        return layouts[i]
+                except Exception:
+                    pass
+
+        # 3) Mapping par type (essayons d'attraper tes masters)
+        type_key = (slide_type or "").lower()
+        preferred_names = []
+        if type_key == "cover":
+            preferred_names = ["cover", "couverture", "title", "titre"]
+        elif type_key == "section":
+            preferred_names = ["section", "separator", "chapitre"]
+        elif type_key in ("qcm", "vrai_faux", "cas_pratique", "mise_en_situation", "objectifs"):
+            preferred_names = ["content", "titre et contenu", "title and content", "contenu"]
+
+        for part in preferred_names:
+            for i in range(len(layouts)):
+                try:
+                    if part in layouts[i].name.lower():
+                        return layouts[i]
+                except Exception:
+                    pass
+
+        # 4) Fallbacks sûrs
+        # Essayons "Title and Content" (souvent index 1)
+        try:
+            if len(layouts) > 1 and "title" in layouts[1].name.lower():
+                return layouts[1]
+        except Exception:
+            pass
+
+        # Sinon Blank (souvent index 6)
+        try:
+            if len(layouts) > 6 and "blank" in layouts[6].name.lower():
+                return layouts[6]
+        except Exception:
+            pass
+
+        # Dernier recours: premier layout
+        return layouts[0]
+
+    # ---------- Build principal ----------
+
     def build(self):
-        """Construit la présentation"""
-        print(f"🔨 Construction de {len(self.slides_data)} slides...")
+        print(f"🔨 Construction de {len(self.slides_data)} slides…")
 
         for i, slide_data in enumerate(self.slides_data):
             try:
                 slide_type = slide_data.get('type', 'generic')
-                print(f"  • Slide {i+1}/{len(self.slides_data)}: {slide_type}")
+                layout_hint = slide_data.get('ppt_layout')  # NEW: string|int|dict
+                layout = self._pick_layout(slide_type, layout_hint)
+                print(f"  • Slide {i+1}/{len(self.slides_data)}: {slide_type} -> layout '{getattr(layout, 'name', '?')}'")
 
-                if slide_type == 'cover':
-                    # souvent ignoré — mais on peut l’ajouter si demandé
-                    self._build_generic(slide_data)
-                elif slide_type == 'section':
-                    self._build_generic(slide_data)
-                elif slide_type == 'qcm':
-                    self._build_qcm(slide_data)
-                elif slide_type == 'correction':
-                    self._build_correction(slide_data)
-                elif slide_type == 'vrai_faux':
-                    self._build_qcm(slide_data)  # même structure
-                elif slide_type == 'cas_pratique':
-                    self._build_qcm(slide_data)  # même grille base
-                elif slide_type == 'mise_en_situation':
-                    self._build_qcm(slide_data)
-                elif slide_type == 'objectifs':
-                    self._build_correction(slide_data)
-                else:
-                    self._build_generic(slide_data)
+                # Ajout avec la mise en page choisie (=> héritage du master/template)
+                slide = self.prs.slides.add_slide(layout)
+
+                # Respect du template: on ne repeint PAS le fond si background est None/absent
+                bg_color = self._safe_bg(slide_data)
+                if bg_color is not None:  # si chaîne hex, on force la couleur
+                    background = slide.background
+                    fill = background.fill
+                    fill.solid()
+                    fill.fore_color.rgb = Colors.hex_to_rgb(bg_color)
+
+                # Dispatcher contenu
+                builder = {
+                    'cover': self._fill_generic,
+                    'section': self._fill_generic,
+                    'qcm': self._fill_qcm,
+                    'vrai_faux': self._fill_qcm,
+                    'cas_pratique': self._fill_qcm,
+                    'mise_en_situation': self._fill_qcm,
+                    'objectifs': self._fill_correction,
+                    'correction': self._fill_correction,
+                }.get(slide_type, self._fill_generic)
+
+                builder(slide, slide_data)
 
             except Exception as e:
                 print(f"❌ Erreur slide {i+1}: {str(e)}")
                 import traceback
                 print(traceback.format_exc())
-                self._build_error_slide(i+1, str(e))
+                self._build_error_slide_fallback(str(e))
 
         temp_path = os.path.join(tempfile.gettempdir(), 'presentation_zmforma.pptx')
         self.prs.save(temp_path)
         print(f"✅ Présentation sauvegardée: {temp_path}")
 
-        # Nettoyage template temporaire
         if self._tmp_template_path and os.path.exists(self._tmp_template_path):
             try:
                 os.remove(self._tmp_template_path)
@@ -96,67 +188,47 @@ class PresentationBuilder:
 
         return temp_path
 
-    # ---------- Builders ----------
+    def _safe_bg(self, data):
+        """
+        Retourne None si on veut garder le fond du template.
+        Retourne une chaîne hex si on veut forcer un fond solide.
+        """
+        if 'background' not in data or data.get('background') in (None, "", "None", "null"):
+            return None
+        return data.get('background')
 
-    def _build_qcm(self, data):
-        layout = data.get('layout', {})
-        bg_color = data.get('background', None)  # None -> garder le fond du template
+    # ---------- Fillers par type ----------
 
-        slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
+    def _fill_qcm(self, slide, data):
+        layout_cfg = data.get('layout', {})
 
-        if bg_color:  # seulement si on veut par-dessus le template
-            background = slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = Colors.hex_to_rgb(bg_color)
+        if 'accent_bar' in layout_cfg:
+            self._add_shape(slide, layout_cfg['accent_bar'])
+        if 'kicker' in layout_cfg:
+            self._add_textbox(slide, layout_cfg['kicker'])
+        if 'title' in layout_cfg:
+            self._add_textbox(slide, layout_cfg['title'])
+        if 'question' in layout_cfg:
+            self._add_textbox(slide, layout_cfg['question'])
+        if 'context' in layout_cfg and layout_cfg['context']:
+            self._add_textbox(slide, layout_cfg['context'])
+        if 'choices' in layout_cfg:
+            self._add_bullets(slide, layout_cfg['choices'])
+        if 'image' in layout_cfg and layout_cfg['image']:
+            self._add_image(slide, layout_cfg['image'])
 
-        if 'accent_bar' in layout:
-            self._add_shape(slide, layout['accent_bar'])
-        if 'kicker' in layout:
-            self._add_textbox(slide, layout['kicker'])
-        if 'title' in layout:
-            self._add_textbox(slide, layout['title'])
-        if 'question' in layout:
-            self._add_textbox(slide, layout['question'])
-        if 'context' in layout and layout['context']:
-            self._add_textbox(slide, layout['context'])
-        if 'choices' in layout:
-            self._add_bullets(slide, layout['choices'])
-        if 'image' in layout and layout['image']:
-            self._add_image(slide, layout['image'])
-
-    def _build_correction(self, data):
-        layout = data.get('layout', {})
-        bg_color = data.get('background', None)
-
-        slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
-
-        if bg_color:
-            background = slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = Colors.hex_to_rgb(bg_color)
-
+    def _fill_correction(self, slide, data):
+        layout_cfg = data.get('layout', {})
         for key in ['accent_bar', 'label', 'answer', 'answer_text', 'title', 'explanation', 'corrections', 'elements']:
-            if key in layout and layout[key]:
-                if isinstance(layout[key], dict) and 'items' in layout[key]:
-                    self._add_bullets(slide, layout[key])
-                elif isinstance(layout[key], dict):
-                    self._add_textbox(slide, layout[key])
+            if key in layout_cfg and layout_cfg[key]:
+                if isinstance(layout_cfg[key], dict) and 'items' in layout_cfg[key]:
+                    self._add_bullets(slide, layout_cfg[key])
+                elif isinstance(layout_cfg[key], dict):
+                    self._add_textbox(slide, layout_cfg[key])
 
-    def _build_generic(self, data):
-        layout = data.get('layout', {})
-        bg_color = data.get('background', None)
-
-        slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
-
-        if bg_color:
-            background = slide.background
-            fill = background.fill
-            fill.solid()
-            fill.fore_color.rgb = Colors.hex_to_rgb(bg_color)
-
-        for key, element in layout.items():
+    def _fill_generic(self, slide, data):
+        layout_cfg = data.get('layout', {})
+        for key, element in layout_cfg.items():
             if element and isinstance(element, dict):
                 if 'items' in element:
                     self._add_bullets(slide, element)
@@ -167,7 +239,7 @@ class PresentationBuilder:
                 elif 'fill' in element:
                     self._add_shape(slide, element)
 
-    def _build_error_slide(self, slide_num, error_msg):
+    def _build_error_slide_fallback(self, error_msg):
         slide = self.prs.slides.add_slide(self.prs.slide_layouts[6])
         background = slide.background
         fill = background.fill
@@ -175,14 +247,14 @@ class PresentationBuilder:
         fill.fore_color.rgb = RGBColor(255, 240, 240)
 
         title_box = slide.shapes.add_textbox(Inches(0.5), Inches(1.5), Inches(9.0), Inches(0.8))
-        title_box.text = f"❌ Erreur - Slide {slide_num}"
+        title_box.text = "❌ Erreur - Slide"
         Formatter.format_textbox(title_box, {'fontSize': 32, 'bold': True, 'color': 'D32F2F', 'align': 'center'})
 
         error_box = slide.shapes.add_textbox(Inches(0.5), Inches(2.5), Inches(9.0), Inches(2.0))
         error_box.text = str(error_msg)[:700]
         Formatter.format_textbox(error_box, {'fontSize': 14, 'color': '666666', 'align': 'left'})
 
-    # ---------- Utilitaires ----------
+    # ---------- Utilitaires d’ajout ----------
 
     def _add_textbox(self, slide, config):
         if not config or 'text' not in config:
@@ -194,20 +266,17 @@ class PresentationBuilder:
 
         textbox = slide.shapes.add_textbox(x, y, w, h)
         textbox.text = str(config['text'])
-
-        # Auto-fit pour éviter le chevauchement
         try:
             textbox.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
         except Exception:
             pass
-
         Formatter.format_textbox(textbox, config, self.default_font)
 
     def _add_bullets(self, slide, config):
         if not config or 'items' not in config:
             return
         items = config['items']
-        if not items or len(items) == 0:
+        if not items:
             return
 
         x = Inches(config.get('x', 0.6))
