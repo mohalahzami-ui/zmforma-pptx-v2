@@ -3,11 +3,8 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR, MSO_AUTO_SIZE
 from pptx.dml.color import RGBColor
 
 class Colors:
-    """Palette & helpers couleurs"""
-
     @staticmethod
     def hex_to_rgb(hex_color):
-        """'#RRGGBB' -> RGBColor"""
         if not hex_color:
             return RGBColor(255, 255, 255)
         hex_color = str(hex_color).lstrip('#')
@@ -24,7 +21,6 @@ class Colors:
 
     @staticmethod
     def get_alignment(align_str):
-        """'left' | 'center' | 'right' | 'justify' -> PP_ALIGN"""
         if not align_str:
             return PP_ALIGN.LEFT
         align_map = {
@@ -37,7 +33,6 @@ class Colors:
 
     @staticmethod
     def get_anchor(anchor_str):
-        """'top' | 'middle' | 'bottom' -> MSO_ANCHOR"""
         if not anchor_str:
             return MSO_ANCHOR.TOP
         anchor_map = {
@@ -47,50 +42,26 @@ class Colors:
         }
         return anchor_map.get(str(anchor_str).lower(), MSO_ANCHOR.TOP)
 
-
 class Formatter:
-    """Formatage texte + listes (avec auto-fit anti-chevauchement)"""
-
     @staticmethod
     def format_textbox(textbox, config, default_font="Arial"):
-        """
-        Applique le style à une textbox.
-
-        config options:
-            - fontSize: int
-            - bold: bool
-            - color: hex str
-            - align: 'left'|'center'|'right'|'justify'
-            - font: str
-            - anchor: 'top'|'middle'|'bottom'
-        """
         text_frame = textbox.text_frame
         text_frame.word_wrap = True
-
-        # ✅ auto-fit pour éviter le chevauchement (tout en gardant le wrap)
         try:
             text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
         except Exception:
             pass
-
-        # Marges internes légères
         text_frame.margin_left = Inches(0.05)
         text_frame.margin_right = Inches(0.05)
         text_frame.margin_top = Inches(0.05)
         text_frame.margin_bottom = Inches(0.05)
+        text_frame.vertical_anchor = Colors.get_anchor(config.get('anchor', 'top'))
 
-        # Ancrage vertical
-        anchor = config.get('anchor', 'top')
-        text_frame.vertical_anchor = Colors.get_anchor(anchor)
-
-        # Paragraphe(s)
         for paragraph in text_frame.paragraphs:
             paragraph.alignment = Colors.get_alignment(config.get('align', 'left'))
             paragraph.space_before = Pt(0)
             paragraph.space_after = Pt(6)
             paragraph.line_spacing = 1.2
-
-            # Runs
             for run in paragraph.runs:
                 run.font.name = config.get('font', default_font)
                 run.font.size = Pt(config.get('fontSize', 16))
@@ -101,18 +72,14 @@ class Formatter:
 
     @staticmethod
     def add_bullet_points(text_frame, items, config, default_font="Arial"):
-        """Ajoute des bullets formatés (auto-fit activé)."""
         if not items:
             return
-
         text_frame.clear()
         text_frame.word_wrap = True
         try:
             text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
         except Exception:
             pass
-
-        # Marges
         text_frame.margin_left = Inches(0.1)
         text_frame.margin_right = Inches(0.1)
         text_frame.margin_top = Inches(0.05)
@@ -121,22 +88,15 @@ class Formatter:
         for i, item in enumerate(items):
             if not item:
                 continue
-
             p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
             p.text = str(item)
             p.level = 0
-
-            # Puces
             if config.get('bullet', True):
                 p.bullet = True
-
-            # Espacements & alignement
             p.space_before = Pt(3)
             p.space_after = Pt(3)
             p.line_spacing = 1.15
             p.alignment = Colors.get_alignment(config.get('align', 'left'))
-
-            # Police
             for run in p.runs:
                 run.font.name = config.get('font', default_font)
                 run.font.size = Pt(config.get('fontSize', 16))
