@@ -1,0 +1,9 @@
+txt__pycache__/
+*.pyc
+*.pyo
+*.pptx
+venv/
+env/
+.env
+*.log
+.DS_Store
