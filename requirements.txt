@@ -1,7 +1,8 @@
 Flask==3.0.0
 python-pptx==0.6.23
-Pillow>=10.0.0
-requests>=2.31.0
-gunicorn>=21.0.0
-flask-cors>=4.0.0
-lxml>=4.9.0
+Pillow==12.0.0
+requests==2.32.5
+gunicorn==23.0.0
+flask-cors==6.0.1
+lxml==6.0.2
+PyMuPDF==1.24.9  # pour lire les PDF
