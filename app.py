@@ -1,5 +1,5 @@
 # app.py
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 import os
 from datetime import datetime
@@ -10,6 +10,11 @@ app = Flask(__name__)
 CORS(app)
 
 TEMPLATE_URL = os.environ.get("TEMPLATE_URL")  # à configurer via Render ou .env
+
+# === AJOUT : constantes pour servir le PPTX local ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PPTX_DIR = os.path.join(BASE_DIR, "utils")   # dossier où se trouve ton fichier
+PPTX_FILE = "Formation.pptx"                 # nom exact du fichier à télécharger
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -52,6 +57,21 @@ def generate():
         as_attachment=True,
         download_name=filename
     )
+
+# === AJOUT : route /download pour servir utils/Formation.pptx ===
+@app.route('/download', methods=['GET'])
+def download_pptx():
+    try:
+        file_path = os.path.join(PPTX_DIR, PPTX_FILE)
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"Le fichier {PPTX_FILE} est introuvable dans utils/."}), 404
+        return send_from_directory(
+            PPTX_DIR,
+            PPTX_FILE,
+            as_attachment=True
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
