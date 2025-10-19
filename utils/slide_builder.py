@@ -1,260 +1,121 @@
+# utils/slide_builder.py
 from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.dml.color import RGBColor
-from pptx.enum.text import MSO_AUTO_SIZE, PP_ALIGN
-import tempfile
-import os
-import requests
+from pptx.util import Inches
+from pptx.enum.text import MSO_AUTO_SIZE
+import tempfile, os, requests
 from io import BytesIO
 from PIL import Image
 from .styles import Colors, Formatter
 
 class PresentationBuilder:
-    """
-    BUILDER OPTIMISÉ - UTILISE LES PLACEHOLDERS DU TEMPLATE
-    """
-
     def __init__(self, data, template_url=None):
         self.data = data
         self.slides_data = data.get('slides', [])
-        self.theme = data.get('theme', {})
-        self.default_font = self.theme.get('font', 'Arial')
-        self._tmp_template_path = None
-
-        if template_url:
-            try:
-                print(f"⬇️  Téléchargement template: {template_url}")
-                r = requests.get(template_url, timeout=25)
-                r.raise_for_status()
-                fd, path = tempfile.mkstemp(suffix=".pptx")
-                os.close(fd)
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                self._tmp_template_path = path
-                self.prs = Presentation(self._tmp_template_path)
-                print("✅ Template chargé")
-                
-                # Suppression des slides existantes
-                nb_slides = len(self.prs.slides)
-                if nb_slides > 0:
-                    print(f"🗑️  Suppression de {nb_slides} slides du template...")
-                    while len(self.prs.slides) > 0:
-                        rId = self.prs.slides._sldIdLst[0].rId
-                        self.prs.part.drop_rel(rId)
-                        del self.prs.slides._sldIdLst[0]
-                    print("✅ Template nettoyé")
-                
-            except Exception as e:
-                print(f"⚠️  Erreur template: {e}")
-                self.prs = Presentation()
-        else:
-            self.prs = Presentation()
-
+        self.default_font = data.get('theme', {}).get('font', 'Arial')
+        self.prs = self._load_template(template_url)
         self.prs.slide_width = Inches(10)
         self.prs.slide_height = Inches(5.625)
 
-        # Liste des layouts
-        self._layout_names = []
-        try:
-            for i, l in enumerate(self.prs.slide_layouts):
-                name = getattr(l, "name", f"Layout {i}")
-                self._layout_names.append(name)
-                print(f"  Layout {i}: {name}")
-        except Exception:
-            pass
-
-    def _pick_layout(self, slide_type):
-        """Sélection layout - PRIORITÉ AU BLANK pour contrôle total"""
-        layouts = self.prs.slide_layouts
-        
-        # Pour TOUS les types, on veut "Blank" pour avoir le contrôle total
-        for layout in layouts:
+    def _load_template(self, template_url):
+        """Télécharge et charge template.pptx ou crée un blanc."""
+        if template_url:
             try:
-                if 'blank' in layout.name.lower():
-                    return layout
-            except Exception:
-                pass
-        
-        # Fallback
-        return layouts[min(6, len(layouts)-1)] if len(layouts) > 6 else layouts[0]
+                resp = requests.get(template_url, timeout=30)
+                resp.raise_for_status()
+                tmp = tempfile.mkstemp(suffix='.pptx')[1]
+                with open(tmp, 'wb') as f:
+                    f.write(resp.content)
+                return Presentation(tmp)
+            except Exception as e:
+                print("Erreur de téléchargement du template :", e)
+        return Presentation()
 
     def build(self):
-        """Construction"""
-        print(f"🔨 Construction de {len(self.slides_data)} slides...")
+        for slide_data in self.slides_data:
+            self._add_slide(slide_data)
+        tmp_out = tempfile.mkstemp(suffix='.pptx')[1]
+        self.prs.save(tmp_out)
+        return tmp_out
 
-        for i, slide_data in enumerate(self.slides_data):
-            try:
-                slide_type = slide_data.get('type', 'generic')
-                layout = self._pick_layout(slide_type)
-                layout_name = getattr(layout, 'name', '?')
-                print(f"  • Slide {i+1}: {slide_type} -> {layout_name}")
-
-                slide = self.prs.slides.add_slide(layout)
-
-                # NE JAMAIS repeindre le fond
-                self._fill_slide(slide, slide_data)
-
-            except Exception as e:
-                print(f"❌ Erreur slide {i+1}: {str(e)}")
-                import traceback
-                print(traceback.format_exc())
-
-        temp_path = os.path.join(tempfile.gettempdir(), 'presentation_zmforma.pptx')
-        self.prs.save(temp_path)
-        print(f"✅ Présentation sauvegardée: {temp_path}")
-
-        if self._tmp_template_path and os.path.exists(self._tmp_template_path):
-            try:
-                os.remove(self._tmp_template_path)
-            except Exception:
-                pass
-
-        return temp_path
-
-    def _fill_slide(self, slide, data):
-        """Remplit la slide - SANS BORDURES"""
-        layout_cfg = data.get('layout', {})
-        
-        for key, element in layout_cfg.items():
-            if not element or not isinstance(element, dict):
-                continue
-            
+    def _add_slide(self, slide_data):
+        slide_type = slide_data.get('type','generic')
+        hint = slide_data.get('ppt_layout')  # nom du layout
+        layout = self._pick_layout(hint, slide_type)
+        slide = self.prs.slides.add_slide(layout)
+        # On garde le fond du template, sauf si background est forcé :
+        bg = slide_data.get('background')
+        if bg:
+            slide.background.fill.solid()
+            slide.background.fill.fore_color.rgb = Colors.hex_to_rgb(bg)
+        # Remplissage
+        for key, element in slide_data.get('layout', {}).items():
+            if not element: continue
             if 'items' in element:
-                self._add_bullets_clean(slide, element)
+                self._add_bullets(slide, element)
             elif 'text' in element:
-                self._add_textbox_clean(slide, element)
+                self._add_text(slide, element)
             elif 'url' in element:
                 self._add_image(slide, element)
-            elif 'fill' in element:
-                self._add_shape(slide, element)
 
-    def _add_textbox_clean(self, slide, config):
-        """Ajoute textbox SANS bordures ni cadres"""
-        if not config or 'text' not in config:
-            return
-        
-        x = Inches(config.get('x', 0.5))
-        y = Inches(config.get('y', 1.0))
-        w = Inches(config.get('w', 5.0))
-        h = Inches(config.get('h', 1.0))
+    def _pick_layout(self, hint, slide_type):
+        layouts = self.prs.slide_layouts
+        # on cherche par nom partiel :
+        if isinstance(hint, str):
+            key = hint.lower()
+            for lay in layouts:
+                if key in lay.name.lower():
+                    return lay
+        # sinon on prend "Title and Content" par défaut
+        for lay in layouts:
+            if "title" in lay.name.lower() and "content" in lay.name.lower():
+                return lay
+        # fallback : premier
+        return layouts[0]
 
-        textbox = slide.shapes.add_textbox(x, y, w, h)
-        
-        # CRITIQUE : Supprimer toutes les bordures
-        textbox.line.fill.background()  # Pas de bordure
-        
-        text_frame = textbox.text_frame
-        text_frame.clear()
-        text_frame.word_wrap = True
-        text_frame.margin_left = 0
-        text_frame.margin_right = 0
-        text_frame.margin_top = 0
-        text_frame.margin_bottom = 0
-        
-        # Ajouter le texte
-        p = text_frame.paragraphs[0]
-        p.text = str(config['text'])
-        p.alignment = PP_ALIGN.LEFT
-        
-        # Formatage
-        for run in p.runs:
-            run.font.name = config.get('font', self.default_font)
-            run.font.size = Pt(config.get('fontSize', 16))
-            run.font.bold = config.get('bold', False)
-            
-            color = config.get('color')
-            if color:
-                run.font.color.rgb = Colors.hex_to_rgb(color)
+    # Méthodes pour ajouter texte / bullets / images :
+    def _add_text(self, slide, cfg):
+        x,y,w,h = Inches(cfg.get('x',0.5)), Inches(cfg.get('y',1.0)), Inches(cfg.get('w',5.0)), Inches(cfg.get('h',1.0))
+        box = slide.shapes.add_textbox(x,y,w,h)
+        box.text = str(cfg['text'])
+        try:
+            box.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        except:
+            pass
+        Formatter.format_textbox(box, cfg, self.default_font)
 
-    def _add_bullets_clean(self, slide, config):
-        """Ajoute bullets SANS bordures"""
-        if not config or 'items' not in config:
-            return
-        
-        items = config['items']
-        if not items:
-            return
+    def _add_bullets(self, slide, cfg):
+        x,y,w,h = Inches(cfg.get('x',0.5)), Inches(cfg.get('y',1.0)), Inches(cfg.get('w',5.0)), Inches(cfg.get('h',2.0))
+        tb = slide.shapes.add_textbox(x,y,w,h)
+        try:
+            tb.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        except:
+            pass
+        Formatter.add_bullet_points(tb.text_frame, cfg['items'], cfg, self.default_font)
 
-        x = Inches(config.get('x', 0.5))
-        y = Inches(config.get('y', 2.0))
-        w = Inches(config.get('w', 5.0))
-        h = Inches(config.get('h', 2.0))
-
-        textbox = slide.shapes.add_textbox(x, y, w, h)
-        
-        # CRITIQUE : Supprimer bordures
-        textbox.line.fill.background()
-        
-        text_frame = textbox.text_frame
-        text_frame.clear()
-        text_frame.word_wrap = True
-        text_frame.margin_left = 0
-        text_frame.margin_right = 0
-        text_frame.margin_top = 0
-        text_frame.margin_bottom = 0
-        
-        for i, item in enumerate(items):
-            if not item:
-                continue
-            
-            p = text_frame.paragraphs[0] if i == 0 else text_frame.add_paragraph()
-            p.text = str(item)
-            p.level = 0
-            p.alignment = PP_ALIGN.LEFT
-            
-            if config.get('bullet', True):
-                p.bullet = True
-            
-            for run in p.runs:
-                run.font.name = config.get('font', self.default_font)
-                run.font.size = Pt(config.get('fontSize', 16))
-                run.font.bold = config.get('bold', False)
-                
-                color = config.get('color')
-                if color:
-                    run.font.color.rgb = Colors.hex_to_rgb(color)
-
-    def _add_shape(self, slide, config):
-        """Ajoute forme"""
-        if not config:
-            return
-        
-        x = Inches(config.get('x', 0))
-        y = Inches(config.get('y', 0))
-        w = Inches(config.get('w', 1))
-        h = Inches(config.get('h', 1))
-        
-        shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, w, h)
-        
-        if 'fill' in config:
-            shape.fill.solid()
-            shape.fill.fore_color.rgb = Colors.hex_to_rgb(config['fill'])
-        
-        shape.line.fill.background()
-
-    def _add_image(self, slide, config):
-        """Ajoute image"""
-        if not config or 'url' not in config:
-            return
-        
-        url = config['url']
-        x = Inches(config.get('x', 5.0))
-        y = Inches(config.get('y', 1.0))
-        w = Inches(config.get('w', 3.0))
-        h = Inches(config.get('h', 2.0))
-
+    def _add_image(self, slide, cfg):
+        from PIL import Image
+        url = cfg.get('url'); x,y,w,h = cfg.get('x',5.6), cfg.get('y',1.0), cfg.get('w',3.6), cfg.get('h',2.25)
+        if not url: return
         try:
             if url.startswith('http'):
-                response = requests.get(url, timeout=12)
-                response.raise_for_status()
-                image_stream = BytesIO(response.content)
-                img = Image.open(image_stream)
-                img.verify()
-                image_stream.seek(0)
-                slide.shapes.add_picture(image_stream, x, y, width=w, height=h)
+                resp = requests.get(url, timeout=15)
+                resp.raise_for_status()
+                raw = BytesIO(resp.content)
             else:
-                if os.path.exists(url):
-                    slide.shapes.add_picture(url, x, y, width=w, height=h)
+                raw = open(url, 'rb')
+            img = Image.open(raw)
+            W,H = img.size; ratio = W/H if H else 1
+            target_ratio = 16/9
+            # recadrage 16:9
+            if abs(ratio - target_ratio)>0.01:
+                if ratio>target_ratio:
+                    new_w = int(H * target_ratio); x0 = (W-new_w)//2
+                    img = img.crop((x0,0,x0+new_w,H))
+                else:
+                    new_h = int(W / target_ratio); y0 = (H-new_h)//2
+                    img = img.crop((0,y0,W,y0+new_h))
+            img = img.resize((1920,1080))
+            out = BytesIO(); img.save(out, format='PNG'); out.seek(0)
+            slide.shapes.add_picture(out, Inches(x), Inches(y), width=Inches(w), height=Inches(h))
         except Exception as e:
-            print(f"⚠️  Image impossible: {url} - {str(e)}")
+            print("Image KO :",e)
