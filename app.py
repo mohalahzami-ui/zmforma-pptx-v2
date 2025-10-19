@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 import os
@@ -9,7 +8,7 @@ from utils.slide_builder import PresentationBuilder
 app = Flask(__name__)
 CORS(app)
 
-TEMPLATE_URL = os.environ.get("TEMPLATE_URL")  # Optionnel maintenant
+TEMPLATE_URL = os.environ.get("TEMPLATE_URL")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PPTX_DIR = os.path.join(BASE_DIR, "utils")
 PPTX_FILE = "Formation.pptx"
@@ -18,7 +17,7 @@ PPTX_FILE = "Formation.pptx"
 def home():
     return jsonify({
         "service": "ZMForma PowerPoint Generator v2",
-        "status": "online ✅",
+        "status": "online",
         "endpoints": {
             "health": "GET /health",
             "extract": "POST /extract",
@@ -61,7 +60,7 @@ def extract():
         return jsonify({"error": "Unsupported filetype"}), 400
     
     out['filename'] = filename
-    print(f"📥 Extraction réussie : {filename} ({len(data)} bytes)")
+    print(f"Extraction reussie : {filename} ({len(data)} bytes)")
     return jsonify(out)
 
 @app.route('/generate', methods=['POST'])
@@ -72,14 +71,14 @@ def generate():
         return jsonify({"error":"Invalid payload"}), 400
     
     num_slides = len(payload.get('slides', []))
-    print(f"📥 Génération demandée : {num_slides} slides")
+    print(f"Generation demandee : {num_slides} slides")
     
     builder = PresentationBuilder(payload, template_url=TEMPLATE_URL)
     pptx_path = builder.build()
     
     filename = payload.get('filename', f"Formation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx")
     
-    print(f"✅ PPTX généré : {filename}")
+    print(f"PPTX genere : {filename}")
     
     return send_file(
         pptx_path,
@@ -95,7 +94,7 @@ def download_pptx():
         if not os.path.exists(file_path):
             return jsonify({"error": f"Le fichier {PPTX_FILE} est introuvable dans utils/."}), 404
         
-        print(f"📥 Téléchargement template : {PPTX_FILE}")
+        print(f"Telechargement template : {PPTX_FILE}")
         return send_from_directory(
             PPTX_DIR,
             PPTX_FILE,
@@ -106,13 +105,3 @@ def download_pptx():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
-```
-
----
-
-## 📝 ÉTAPE 3 : Vérifie que `.gitattributes` est correct
-
-Ton fichier `.gitattributes` doit contenir :
-```
-*.pptx filter=lfs diff=lfs merge=lfs -text
-*.zip filter=lfs diff=lfs merge=lfs -text
